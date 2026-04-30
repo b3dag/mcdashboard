@@ -35,7 +35,7 @@ Login-protected, role-based, with audit logging, an in-browser terminal, and no 
 ## How it fits together
 
 ```
-            https://dash.$YOUR_DOMAIN_NAME.com
+            https://dash.YOUR_DOMAIN_NAME.com
                        │
               Cloudflare Tunnel
                        │
@@ -199,8 +199,8 @@ Authenticate, create a tunnel, and route DNS:
 
 ```bash
 cloudflared tunnel login                                       # opens a URL — log in via browser
-cloudflared tunnel create $YOUR_DOMAIN_NAME-dash                       # note the tunnel ID it prints
-cloudflared tunnel route dns $YOUR_DOMAIN_NAME-dash dash.$YOUR_DOMAIN_NAME.com
+cloudflared tunnel create YOUR_DOMAIN_NAME-dash                       # note the tunnel ID it prints
+cloudflared tunnel route dns YOUR_DOMAIN_NAME-dash dash.YOUR_DOMAIN_NAME.com
 ```
 
 Create the tunnel config — replace `<tunnel-id>` with the ID from above:
@@ -215,7 +215,7 @@ tunnel: <tunnel-id>
 credentials-file: /home/admi/.cloudflared/<tunnel-id>.json
 
 ingress:
-  - hostname: dash.$YOUR_DOMAIN_NAME.com
+  - hostname: dash.YOUR_DOMAIN_NAME.com
     service: http://127.0.0.1:8080
   - service: http_status:404
 ```
@@ -226,14 +226,14 @@ Run cloudflared as a service:
 cp /srv/dashboard/systemd/cloudflared.service ~/.config/systemd/user/
 nano ~/.config/systemd/user/cloudflared.service
 # Edit ExecStart to:
-#     /usr/bin/cloudflared tunnel run $YOUR_DOMAIN_NAME-dash
+#     /usr/bin/cloudflared tunnel run YOUR_DOMAIN_NAME-dash
 
 systemctl --user daemon-reload
 systemctl --user enable --now cloudflared
 systemctl --user status cloudflared
 ```
 
-Visit `https://dash.$YOUR_DOMAIN_NAME.com`. You should see the login page.
+Visit `https://dash.YOUR_DOMAIN_NAME.com`. You should see the login page.
 
 ## 9. (Optional) In-browser terminal
 
@@ -264,7 +264,7 @@ echo "TERMINAL_ENABLED=true" >> /srv/dashboard/.env
 systemctl --user restart dashboard
 ```
 
-Visit `https://dash.$YOUR_DOMAIN_NAME.com/terminal.html` — you should get a bash shell.
+Visit `https://dash.YOUR_DOMAIN_NAME.com/terminal.html` — you should get a bash shell.
 
 ---
 
@@ -485,7 +485,7 @@ systemctl --user restart dashboard
 
 Then in your browser:
 
-1. Log in to `https://dash.$YOUR_DOMAIN_NAME.com` as a super-operator.
+1. Log in to `https://dash.YOUR_DOMAIN_NAME.com` as a super-operator.
 2. Go to **users**.
 3. Find your own user, set the role for `creative01` to **operator** (or **starter**, or leave blank for no access).
 4. Repeat for any other users you want to give access to.
@@ -551,7 +551,7 @@ sqlite3 /srv/dashboard/data/dashboard.db \
 Or via API (super-only):
 
 ```
-GET https://dash.$YOUR_DOMAIN_NAME.com/api/audit?limit=200
+GET https://dash.YOUR_DOMAIN_NAME.com/api/audit?limit=200
 ```
 
 ## Updating the dashboard code
