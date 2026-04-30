@@ -1,189 +1,190 @@
 # brotalius dashboard
 
-A self-hosted web dashboard for managing Minecraft servers on a Linux box. Login-protected, role-based, with audit logging and an optional in-browser terminal.
+A self-hosted web dashboard for managing Minecraft servers on a Linux box.
 
-```
-┌─────────────────────────────────────────────────────┐
-│            dash.brotalius.com (HTTPS)               │
-│                       │                             │
-│            Cloudflare Tunnel                        │
-│                       │                             │
-│        ┌──────────────▼──────────────┐              │
-│        │   Node.js / Fastify         │              │
-│        │   on 127.0.0.1:8080         │              │
-│        │                             │              │
-│        │   - login (argon2 + cookie) │              │
-│        │   - per-server roles        │              │
-│        │   - systemctl --user start  │              │
-│        │   - rcon-client commands    │              │
-│        │   - sandboxed file editor   │              │
-│        │   - ttyd proxy (optional)   │              │
-│        └──────────────┬──────────────┘              │
-│                       │                             │
-│        ┌──────────────▼──────────────┐              │
-│        │  Minecraft (systemd user    │              │
-│        │  services + RCON)           │              │
-│        └─────────────────────────────┘              │
-└─────────────────────────────────────────────────────┘
-```
-
-## features
-
-- **Username/password login** — argon2id hashing, signed cookie sessions, login rate limiting.
-- **Per-server roles.** Every user has a list of (server, role) pairs:
-  - **starter** can only press Start on that server
-  - **operator** can stop, restart, manage whitelist, send console commands, edit files
-  - **super-operator** (global flag) can do everything everywhere and manage users
-- **In-game commands via RCON.** No need to attach to a console.
-- **Sandboxed file editing.** Operators can browse and edit text files inside each server's folder; path traversal is blocked.
-- **Audit log.** Every state change (login, start, stop, whitelist, file write, etc.) is appended with timestamp, user, and IP.
-- **Optional in-browser shell** (super-only) using `ttyd` proxied through the dashboard's auth.
-- **No open ports.** Cloudflare Tunnel reaches the dashboard outbound; the box itself listens only on `127.0.0.1`.
-
-## requirements
-
-- Linux server (instructions assume Debian 12+; should work on Ubuntu and similar with minor tweaks)
-- Node.js 20+
-- Java 17+ (for the Minecraft servers themselves)
-- A Cloudflare account with your domain on it
-- Outbound internet (no port forwarding needed)
+Login-protected, role-based, with audit logging, an in-browser terminal, and no open ports thanks to Cloudflare Tunnel.
 
 ---
 
-# end-to-end setup
+## Table of contents
 
-The setup below is what was actually performed to get this running on a fresh Debian 13 box. Follow it in order.
+1. [What it does](#what-it-does)
+2. [How it fits together](#how-it-fits-together)
+3. [Roles](#roles)
+4. [Initial setup](#initial-setup) — fresh Linux box to working dashboard
+5. [Adding a new Minecraft server](#adding-a-new-minecraft-server) — the part you'll do most often
+6. [Day-to-day use](#day-to-day-use)
+7. [Troubleshooting](#troubleshooting)
+8. [Security notes](#security-notes)
+9. [What's not included](#whats-not-included)
 
-## 1. base system
+---
+
+## What it does
+
+- Start, stop, and restart Minecraft servers from a web page
+- Manage whitelist entries via RCON
+- Send arbitrary console commands via RCON
+- Browse and edit text files inside each server's folder (sandboxed)
+- Manage dashboard users with per-server roles
+- Open a real bash shell in your browser (super-operators only)
+- Log every state change to an audit table
+
+---
+
+## How it fits together
+
+```
+            https://dash.brotalius.com
+                       │
+              Cloudflare Tunnel
+                       │
+      ┌────────────────▼────────────────┐
+      │   dashboard (Node + Fastify)    │
+      │   listens on 127.0.0.1:8080     │
+      ├─────────────────────────────────┤
+      │   /api/*            api routes  │
+      │   /terminal/*       ttyd proxy  │
+      │   /                 static html │
+      └────────┬───────────────┬────────┘
+               │               │
+       systemctl --user      RCON :2557x
+               │               │
+               ▼               ▼
+       ┌──────────────────────────┐
+       │   Minecraft servers      │
+       │   (one systemd service   │
+       │   per server)            │
+       └──────────────────────────┘
+```
+
+Three pieces run as **user-level systemd services** on the same Linux box:
+
+| Service | What it is |
+| --- | --- |
+| `dashboard` | The web UI and API |
+| `cloudflared` | The Cloudflare Tunnel that exposes the dashboard |
+| `ttyd` | The web terminal (only if you enable it) |
+| `mc-<name>` | One per Minecraft server |
+
+Nothing listens on a public port. Cloudflare reaches the dashboard outbound.
+
+---
+
+## Roles
+
+Every user has either:
+
+- **No access** to a server, or
+- **starter** — can only press *Start*
+- **operator** — can do everything on that server (stop, restart, whitelist, console, files)
+
+Plus a global flag:
+
+- **super-operator** — can do everything on every server, plus manage users and use the in-browser terminal
+
+Role checks happen server-side on every request. The frontend hiding buttons is only UX.
+
+---
+
+# Initial setup
+
+This is what you do once, on a fresh Linux box. Adding more servers later is in the [next section](#adding-a-new-minecraft-server).
+
+## 1. Install system packages
 
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y curl git openjdk-21-jre-headless sqlite3 build-essential
 
-# Node 20.x
+# Node.js 20.x
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
-node --version    # should be v20.x
+
+node --version    # must be v20.x or higher
 ```
 
-## 2. user-level systemd
+`build-essential` is needed because two npm packages (`argon2`, `better-sqlite3`) compile native code on install.
 
-The dashboard, Cloudflare Tunnel, ttyd, and each Minecraft server all run as systemd **user** services. This keeps everything off root and means a crashed Minecraft server can't take the system down.
+## 2. Enable user-level services
 
-Enable lingering so user services keep running after you log out of SSH:
+User services run as your normal user, not root. They need lingering enabled so they keep running after you log out:
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
-(If `loginctl enable-linger admi` without sudo gives `Access denied`, that's expected on Debian — use `sudo`.)
-
-## 3. minecraft server folders
-
-```bash
-sudo mkdir -p /srv/mcserv
-sudo chown -R $USER:$USER /srv/mcserv
-mkdir /srv/mcserv/fabric01
-cd /srv/mcserv/fabric01
-
-# fabric installer (or use vanilla / paper / etc. — the dashboard doesn't care)
-wget https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.1/fabric-installer-1.0.1.jar -O fabric-installer.jar
-java -jar fabric-installer.jar server -mcversion 1.20.4 -downloadMinecraft
-
-# accept the EULA
-echo "eula=true" > eula.txt
-
-# start once to generate server.properties (then Ctrl+C)
-java -Xmx2G -jar fabric-server-launch.jar nogui
-```
-
-Edit `server.properties` and set:
-
-```
-enable-rcon=true
-rcon.port=25575
-rcon.password=<long random password>
-white-list=true
-```
-
-Save the RCON password — you'll need it in the dashboard's `.env`.
-
-Repeat this section for each Minecraft server you want to manage. Use a unique RCON port per server (`25575`, `25576`, ...) so they don't conflict.
-
-## 4. dashboard
+## 3. Set up the dashboard
 
 ```bash
 sudo mkdir -p /srv/dashboard
 sudo chown -R $USER:$USER /srv/dashboard
 cd /srv/dashboard
 
-# either git clone your fork, or unzip this archive here
-# (assuming you've extracted the dashboard folder contents to /srv/dashboard)
+# Drop the dashboard files in here.
+# Either: git clone <your repo> .
+# Or:     unzip the release archive into the current directory.
 
 npm install
 ```
 
-`npm install` will compile two native modules (`argon2` and `better-sqlite3`). If it fails with a Python or compiler error, you forgot `build-essential` — install it and rerun.
+If `npm install` fails with errors about `gyp` or Python, you forgot `build-essential`. Install it and rerun.
 
-### configure
+## 4. Configure
 
 ```bash
 cp .env.example .env
 
-# generate a session secret
+# Generate a session secret — copy the output
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+
+nano .env
 ```
 
-Edit `.env` and set:
-- `SESSION_SECRET` to that random string
-- `RCON_PASSWORD_VANILLA` (and one per server) to the password from `server.properties`
-- `TERMINAL_ENABLED=true` if you want the in-browser shell (see step 7)
+In `.env`, set:
 
-Edit `servers.json` to match your real servers. The `name` is the URL-safe identifier used in permissions; `display_name` is what the UI shows; `folder` is the server's directory; `systemd_unit` is the service name; `password_env` must match a variable name in `.env`.
+| Variable | What to put |
+| --- | --- |
+| `SESSION_SECRET` | The random string you just generated |
+| `RCON_PASSWORD_VANILLA` | The RCON password from your first server's `server.properties` (set this in step 6) |
+| `TERMINAL_ENABLED` | `true` if you want the in-browser bash shell, otherwise leave unset |
 
-### create your first super-operator
+Don't touch `HOST` — it should stay `127.0.0.1`.
+
+## 5. Create your first super-operator
+
+The first user must be created from the command line — there's no signup form (on purpose).
 
 ```bash
 node scripts/create-user.js mael --super
 ```
 
-You'll be prompted for a password (12 character minimum). This is the only way to create the first user — there's a chicken-and-egg problem otherwise.
+You'll be prompted for a password (12 character minimum). After this user exists, you can create more users from inside the dashboard.
 
-If you forget the password, just delete the user and recreate:
-```bash
-sqlite3 data/dashboard.db "DELETE FROM users WHERE username = 'mael';"
-node scripts/create-user.js mael --super
-```
+> **Forgot the password?** No reset email — just delete and recreate:
+> ```bash
+> sqlite3 data/dashboard.db "DELETE FROM users WHERE username = 'mael';"
+> node scripts/create-user.js mael --super
+> ```
 
-### run the dashboard as a service
+## 6. Set up your first Minecraft server
 
-Copy the systemd unit file and enable it:
+See the [Adding a new Minecraft server](#adding-a-new-minecraft-server) section. Come back here when you have one running.
+
+## 7. Run the dashboard as a service
 
 ```bash
 mkdir -p ~/.config/systemd/user
 cp /srv/dashboard/systemd/dashboard.service ~/.config/systemd/user/
+
 systemctl --user daemon-reload
 systemctl --user enable --now dashboard
 systemctl --user status dashboard
 ```
 
-It should say `active (running)` and listen on `127.0.0.1:8080`. Don't expose port 8080 — Cloudflare Tunnel reaches it from the same machine.
+It should say `active (running)` and listen on `127.0.0.1:8080`.
 
-## 5. minecraft server as a systemd service
-
-Copy the example unit and adjust paths:
-
-```bash
-cp /srv/dashboard/systemd/mc-vanilla.service ~/.config/systemd/user/
-nano ~/.config/systemd/user/mc-vanilla.service
-# edit WorkingDirectory and ExecStart to match your server
-systemctl --user daemon-reload
-systemctl --user enable mc-vanilla
-```
-
-The `name` in `servers.json` and the `mc-<name>.service` filename should match — that's how the dashboard finds the service when you click Start.
-
-## 6. cloudflare tunnel
+## 8. Set up Cloudflare Tunnel
 
 Install cloudflared:
 
@@ -194,22 +195,20 @@ echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudf
 sudo apt-get update && sudo apt-get install -y cloudflared
 ```
 
-Log in and create a tunnel:
+Authenticate, create a tunnel, and route DNS:
 
 ```bash
-cloudflared tunnel login           # opens a URL — open it in a browser, pick the zone
-cloudflared tunnel create brotalius-dash
+cloudflared tunnel login                                       # opens a URL — log in via browser
+cloudflared tunnel create brotalius-dash                       # note the tunnel ID it prints
 cloudflared tunnel route dns brotalius-dash dash.brotalius.com
 ```
 
-Note the tunnel ID printed — you'll put it in the config. Then create the config:
+Create the tunnel config — replace `<tunnel-id>` with the ID from above:
 
 ```bash
 mkdir -p ~/.cloudflared
 nano ~/.cloudflared/config.yml
 ```
-
-Paste (replace `<tunnel-id>` with the actual ID):
 
 ```yaml
 tunnel: <tunnel-id>
@@ -221,222 +220,476 @@ ingress:
   - service: http_status:404
 ```
 
-Set up cloudflared as a user service:
+Run cloudflared as a service:
 
 ```bash
 cp /srv/dashboard/systemd/cloudflared.service ~/.config/systemd/user/
-# edit ExecStart to: /usr/bin/cloudflared tunnel run brotalius-dash
 nano ~/.config/systemd/user/cloudflared.service
+# Edit ExecStart to:
+#     /usr/bin/cloudflared tunnel run brotalius-dash
+
 systemctl --user daemon-reload
 systemctl --user enable --now cloudflared
 systemctl --user status cloudflared
 ```
 
-Visit `https://dash.brotalius.com` — you should see the login page.
+Visit `https://dash.brotalius.com`. You should see the login page.
 
-## 7. (optional) in-browser terminal
+## 9. (Optional) In-browser terminal
 
-The dashboard can proxy a real bash terminal through `ttyd`, gated by your super-operator session. It lives at `/terminal.html`.
+The dashboard can proxy a real bash shell at `/terminal.html`, gated to super-operators only.
+
+Install ttyd from GitHub (it's not in Debian repos):
 
 ```bash
-# install ttyd (not in Debian repos — pull from GitHub)
 curl -L https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -o /tmp/ttyd
 sudo mv /tmp/ttyd /usr/local/bin/ttyd
 sudo chmod +x /usr/local/bin/ttyd
 ttyd --version
+```
 
-# install the systemd unit
+Run it as a service:
+
+```bash
 cp /srv/dashboard/systemd/ttyd.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ttyd
 systemctl --user status ttyd
 ```
 
-In `.env`, set:
-```
-TERMINAL_ENABLED=true
-```
+Enable the proxy in the dashboard:
 
-Restart the dashboard:
 ```bash
+echo "TERMINAL_ENABLED=true" >> /srv/dashboard/.env
 systemctl --user restart dashboard
 ```
 
-Visit `https://dash.brotalius.com/terminal.html` — you should get a real bash shell as the dashboard user, only accessible to super-operators.
-
-If you want to disable the terminal later, set `TERMINAL_ENABLED=false` (or remove the line) and restart the dashboard.
+Visit `https://dash.brotalius.com/terminal.html` — you should get a bash shell.
 
 ---
 
-# managing the system
+# Adding a new Minecraft server
 
-## adding more minecraft servers
+You'll do this every time you want to host another modpack or version. There are **four files** to touch and **three commands** to run.
 
-1. Create the server in a new folder under `/srv/mcserv/<name>/`
-2. Set RCON in its `server.properties` with a unique port and password
-3. Copy `mc-vanilla.service` to `mc-<name>.service`, edit paths, enable it
-4. Add a new entry to `servers.json` matching the name and password env var
-5. Add the password to `.env` as `RCON_PASSWORD_<NAME>` (uppercase)
-6. `systemctl --user restart dashboard`
+We'll set up a server called `creative01` as the example. Substitute your own name throughout.
 
-## adding users
+## Naming rules
 
-Once you have at least one super-operator:
+The `name` you pick has to be:
 
-1. Log in as super
-2. Go to **users** → fill in username and password → **create**
-3. Use the per-server dropdowns to set roles
+- Lowercase only
+- Letters `a-z`, digits `0-9`, hyphens `-`
+- Used in URLs and folder paths, so keep it short
 
-To bootstrap a second super if you only have CLI access:
-```bash
-node scripts/create-user.js friend --super
-```
+Good: `vanilla`, `creative01`, `create-astral`, `mc-modded-2`
+Bad: `Creative 01`, `Vanilla!`, `CREATIVE`
 
-## audit log
-
-Every state change is recorded. View recent entries from the API:
-```
-GET /api/audit?limit=200       (super-only)
-```
-
-Or directly from SQLite:
-```bash
-sqlite3 /srv/dashboard/data/dashboard.db "SELECT datetime(ts/1000,'unixepoch'), username, action, target FROM audit_log ORDER BY ts DESC LIMIT 50;"
-```
-
-## updating the dashboard
+## Step 1 — Create the server folder and download the jar
 
 ```bash
-cd /srv/dashboard
-git pull         # if you cloned from git
-npm install      # in case dependencies changed
+cd /srv/mcserv
+mkdir creative01
+cd creative01
+```
+
+For **vanilla Minecraft**:
+```bash
+wget https://piston-data.mojang.com/v1/objects/<HASH>/server.jar -O server.jar
+# Get the latest URL from https://www.minecraft.net/en-us/download/server
+```
+
+For **Fabric**:
+```bash
+wget https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.1/fabric-installer-1.0.1.jar -O fabric-installer.jar
+java -jar fabric-installer.jar server -mcversion 1.20.4 -downloadMinecraft
+# Produces fabric-server-launch.jar
+```
+
+For **Paper, Forge, NeoForge, Quilt**: download from their respective websites. The dashboard doesn't care which mod loader you use — it only needs to know how to start it.
+
+Accept the EULA:
+```bash
+echo "eula=true" > eula.txt
+```
+
+## Step 2 — Generate `server.properties` and configure RCON
+
+Start the server once to generate config files, then stop it:
+
+```bash
+java -Xmx2G -jar server.jar nogui    # use fabric-server-launch.jar for Fabric
+# Wait for "Done" in the log, then Ctrl+C
+```
+
+Edit `server.properties`:
+
+```bash
+nano server.properties
+```
+
+Find and change these lines:
+
+```properties
+enable-rcon=true
+rcon.port=25576
+rcon.password=YOUR_LONG_RANDOM_PASSWORD_HERE
+white-list=true
+server-port=25566
+```
+
+> **Important:** every server you add needs a **unique RCON port** (25575, 25576, 25577, …) and a **unique server port** (25565, 25566, …). Otherwise they'll collide.
+>
+> Generate a strong RCON password:
+> ```bash
+> openssl rand -hex 24
+> ```
+
+## Step 3 — Create the systemd unit
+
+```bash
+cp /srv/dashboard/systemd/mc-vanilla.service ~/.config/systemd/user/mc-creative01.service
+nano ~/.config/systemd/user/mc-creative01.service
+```
+
+Edit the file. The two lines that matter:
+
+```ini
+WorkingDirectory=/srv/mcserv/creative01
+ExecStart=/usr/bin/java -Xms2G -Xmx4G -jar server.jar nogui
+```
+
+> Use `fabric-server-launch.jar` if it's a Fabric server, or whatever the loader's launch jar is called.
+>
+> Adjust the memory (`-Xms` minimum, `-Xmx` maximum). 4G is fine for vanilla, modpacks often want 6–8G.
+
+Reload and enable:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable mc-creative01
+```
+
+(Don't start it yet — we'll do that from the dashboard once it's registered.)
+
+## Step 4 — Add the RCON password to `.env`
+
+```bash
+nano /srv/dashboard/.env
+```
+
+Add a line:
+
+```
+RCON_PASSWORD_CREATIVE01=YOUR_LONG_RANDOM_PASSWORD_HERE
+```
+
+> The variable name must:
+> - Start with `RCON_PASSWORD_`
+> - Be **all uppercase**
+> - Match (case-insensitively) the server name with hyphens replaced by underscores
+>
+> Examples:
+> - server `vanilla` → `RCON_PASSWORD_VANILLA`
+> - server `creative01` → `RCON_PASSWORD_CREATIVE01`
+> - server `create-astral` → `RCON_PASSWORD_CREATE_ASTRAL`
+>
+> The password must exactly match what you wrote in `server.properties`.
+
+## Step 5 — Register the server in `servers.json`
+
+This is the file that tells the dashboard your server exists.
+
+```bash
+nano /srv/dashboard/servers.json
+```
+
+It looks like this:
+
+```json
+{
+  "_comment": "Registry of Minecraft servers …",
+  "servers": [
+    {
+      "name": "vanilla",
+      "display_name": "Vanilla",
+      "folder": "/srv/mcserv/fabric01",
+      "systemd_unit": "mc-vanilla.service",
+      "rcon": {
+        "host": "127.0.0.1",
+        "port": 25575,
+        "password_env": "RCON_PASSWORD_VANILLA"
+      }
+    }
+  ]
+}
+```
+
+Add a new entry inside the `servers` array. **Don't forget the comma** after the previous entry's closing `}`:
+
+```json
+{
+  "_comment": "Registry of Minecraft servers …",
+  "servers": [
+    {
+      "name": "vanilla",
+      "display_name": "Vanilla",
+      "folder": "/srv/mcserv/fabric01",
+      "systemd_unit": "mc-vanilla.service",
+      "rcon": {
+        "host": "127.0.0.1",
+        "port": 25575,
+        "password_env": "RCON_PASSWORD_VANILLA"
+      }
+    },
+    {
+      "name": "creative01",
+      "display_name": "Creative",
+      "folder": "/srv/mcserv/creative01",
+      "systemd_unit": "mc-creative01.service",
+      "rcon": {
+        "host": "127.0.0.1",
+        "port": 25576,
+        "password_env": "RCON_PASSWORD_CREATIVE01"
+      }
+    }
+  ]
+}
+```
+
+What each field does:
+
+| Field | What it means |
+| --- | --- |
+| `name` | The URL-safe identifier. Used in `/server.html?name=…` and permission entries. |
+| `display_name` | What shows up in the UI. Can have spaces and capitals. |
+| `folder` | Absolute path to the server's directory on disk. |
+| `systemd_unit` | The exact filename (with `.service`) you put in `~/.config/systemd/user/`. |
+| `rcon.host` | Always `127.0.0.1` — RCON listens locally on the same machine. |
+| `rcon.port` | Must match `rcon.port` in `server.properties`. **Unique per server.** |
+| `rcon.password_env` | The env variable name in `.env` that holds the RCON password. |
+
+> **Validate the JSON before saving.** A missing comma or extra brace will keep the dashboard from starting. Quick check:
+> ```bash
+> node -e "JSON.parse(require('fs').readFileSync('/srv/dashboard/servers.json'))" && echo OK
+> ```
+
+## Step 6 — Restart the dashboard and grant access
+
+```bash
 systemctl --user restart dashboard
 ```
 
-The SQLite database is preserved across restarts.
+Then in your browser:
 
-## backups
+1. Log in to `https://dash.brotalius.com` as a super-operator.
+2. Go to **users**.
+3. Find your own user, set the role for `creative01` to **operator** (or **starter**, or leave blank for no access).
+4. Repeat for any other users you want to give access to.
 
-What to back up:
+> Super-operators automatically have access to every server — they don't need explicit roles.
 
-- `/srv/dashboard/data/dashboard.db` — users, sessions, audit log
-- `/srv/dashboard/.env` — secrets
-- `/srv/dashboard/servers.json` — server registry
-- Each `/srv/mcserv/<name>/world/` — your worlds
-- Each Minecraft server's `server.properties`, `whitelist.json`, `ops.json`, `banned-players.json`
+## Step 7 — Start it from the dashboard
 
-A simple snapshot:
+Go to **servers**, find your new server, click **start**.
+
+If anything goes wrong, check the logs:
+
+```bash
+journalctl --user -u mc-creative01 --no-pager -n 50
+journalctl --user -u dashboard --no-pager -n 30
+```
+
+## Quick checklist
+
+When adding a new server, you've touched:
+
+- [ ] Created `/srv/mcserv/<name>/` with a working server jar
+- [ ] Set RCON in `server.properties` (unique port, strong password, `enable-rcon=true`)
+- [ ] Created `~/.config/systemd/user/mc-<name>.service` with correct paths
+- [ ] Added `RCON_PASSWORD_<NAME>=...` to `/srv/dashboard/.env`
+- [ ] Added a JSON entry in `/srv/dashboard/servers.json`
+- [ ] Ran `systemctl --user daemon-reload`
+- [ ] Ran `systemctl --user restart dashboard`
+- [ ] Granted yourself a role on the new server in the **users** page
+
+---
+
+# Day-to-day use
+
+## Adding a new dashboard user
+
+1. Log in as super-operator
+2. **users** page → fill in username and password (12+ chars) → **create**
+3. Use the per-server dropdowns to set their roles
+
+## Resetting someone's password
+
+As super-op on the **users** page, click **reset password** next to their name. Their session is force-logged-out.
+
+## Granting yourself another super-op (CLI fallback)
+
+If you only have shell access:
+
+```bash
+cd /srv/dashboard
+node scripts/create-user.js friend --super
+```
+
+## Viewing the audit log
+
+Every state change is logged. Quickest way to read it:
+
+```bash
+sqlite3 /srv/dashboard/data/dashboard.db \
+  "SELECT datetime(ts/1000,'unixepoch'), username, action, target FROM audit_log ORDER BY ts DESC LIMIT 50;"
+```
+
+Or via API (super-only):
+
+```
+GET https://dash.brotalius.com/api/audit?limit=200
+```
+
+## Updating the dashboard code
+
+```bash
+cd /srv/dashboard
+git pull              # if you cloned from git
+npm install           # picks up dependency changes
+systemctl --user restart dashboard
+```
+
+The SQLite database is preserved across restarts — users, sessions, audit log all survive.
+
+## Backups
+
+Back up regularly:
+
+| What | Why |
+| --- | --- |
+| `/srv/dashboard/data/dashboard.db` | Users, audit log |
+| `/srv/dashboard/.env` | All secrets |
+| `/srv/dashboard/servers.json` | Server registry |
+| `/srv/mcserv/*/world/` | Your worlds |
+| `/srv/mcserv/*/whitelist.json`, `ops.json`, `banned-players.json` | MC permissions |
+
+Quick snapshot:
+
 ```bash
 tar czf /backup/dashboard-$(date +%Y%m%d).tar.gz \
   /srv/dashboard/data /srv/dashboard/.env /srv/dashboard/servers.json
 tar czf /backup/mc-$(date +%Y%m%d).tar.gz /srv/mcserv
 ```
 
-Set this up as a cron or systemd timer.
+Hook this into a cron job or a systemd timer.
 
 ---
 
-# troubleshooting
+# Troubleshooting
 
-## "ECONNREFUSED 127.0.0.1:7681" when opening /terminal.html
+### Dashboard won't start
 
-ttyd isn't running. Check:
+Check the logs:
+```bash
+journalctl --user -u dashboard --no-pager -n 50
+```
+
+| Error | Fix |
+| --- | --- |
+| `SESSION_SECRET is required` | You forgot to set it in `.env` |
+| `unable to determine transport target for "pino-pretty"` | You're on an old `server.js`. The current one doesn't use pino-pretty. |
+| `expected '4.x' fastify version` | Old plugin version. Run `npm install @fastify/static@latest @fastify/cookie@latest @fastify/http-proxy@latest` |
+| Crashes silently | `npm install` may have failed natively. Run it again with `build-essential` installed. |
+
+### Pressing Start gives an error
+
+Check what the systemd unit is doing:
+```bash
+journalctl --user -u mc-<name> --no-pager -n 50
+```
+
+| Symptom | Cause |
+| --- | --- |
+| `code=exited, status=203/EXEC` | Wrong path in `ExecStart`. Common: `/usr/bin/ttyd` vs `/usr/local/bin/ttyd`. |
+| Java not found | `sudo apt install openjdk-21-jre-headless` |
+| Port already in use | Another server is using the same port. Change `server-port` in `server.properties`. |
+| Dashboard returns "bad request" / 400 | Browser cache of old `app.js`. Hard refresh (Ctrl+Shift+R). |
+
+### Whitelist or console returns "rcon connect failed"
+
+- Server isn't running yet → start it first
+- RCON not enabled → check `enable-rcon=true` in `server.properties`
+- Wrong password → make sure `.env` matches `server.properties` exactly
+- Wrong port → make sure `servers.json` `rcon.port` matches `server.properties` `rcon.port`
+
+After fixing `.env` or `servers.json`:
+```bash
+systemctl --user restart dashboard
+```
+
+After fixing `server.properties`, restart the MC server too.
+
+### Terminal page shows "ECONNREFUSED 127.0.0.1:7681"
+
+ttyd isn't running:
 ```bash
 systemctl --user status ttyd
 ```
-Common cause: the unit file points at `/usr/bin/ttyd` but ttyd lives at `/usr/local/bin/ttyd`. Fix the unit and reload.
 
-## "Body cannot be empty when content-type is set to 'application/json'"
+If it's failing with `203/EXEC`, the unit file probably points at `/usr/bin/ttyd` — fix it to `/usr/local/bin/ttyd` and reload.
 
-Old browser cache of `app.js`. Hard refresh (`Ctrl+Shift+R`).
+### Can't type in the terminal
 
-## "FastifyError: fastify-plugin: @fastify/static - expected '4.x' fastify version"
-
-The lockfile pinned an old plugin version. Run:
-```bash
-npm install @fastify/static@latest @fastify/cookie@latest @fastify/http-proxy@latest
+ttyd defaults to read-only. The unit file should have `--writable`:
+```
+ExecStart=/usr/local/bin/ttyd --port 7681 --interface 127.0.0.1 --writable bash
 ```
 
-## "Error: unable to determine transport target for 'pino-pretty'"
-
-You upgraded from an older version. The current `server.js` doesn't use pino-pretty. If you've customized your own `server.js`, remove any `transport: { target: 'pino-pretty' }` line.
-
-## Dashboard can press Start but the unit fails
-
-Check `journalctl --user -u mc-<name> --no-pager -n 50`. Common causes:
-- `code=exited, status=203/EXEC` → wrong path in `ExecStart`
-- Java not found → `apt install openjdk-21-jre-headless`
-- Port in use → another server on the same port
-- Missing `eula.txt` → `echo "eula=true" > eula.txt` in the server folder
-
-## Logs
+### Cloudflare Tunnel won't connect
 
 ```bash
-journalctl --user -u dashboard    --no-pager -n 50
-journalctl --user -u cloudflared  --no-pager -n 50
-journalctl --user -u ttyd         --no-pager -n 50
-journalctl --user -u mc-vanilla   --no-pager -n 50
+journalctl --user -u cloudflared --no-pager -n 50
 ```
 
-## Forgot super-operator password
+The tunnel ID in `~/.cloudflared/config.yml` must match the one created with `cloudflared tunnel create`. The `credentials-file` path must point at the JSON file that was generated.
 
+### "loginctl enable-linger" gives "Access denied"
+
+Use `sudo`:
 ```bash
-cd /srv/dashboard
-sqlite3 data/dashboard.db "DELETE FROM users WHERE username = 'YOUR_USERNAME';"
-node scripts/create-user.js YOUR_USERNAME --super
+sudo loginctl enable-linger $USER
 ```
 
 ---
 
-# letting players join from outside your network
+# Security notes
 
-The dashboard handles management — separate problem from how players actually connect to Minecraft.
-
-For Minecraft TCP traffic without opening a port at home, the easiest option is **playit.gg**:
-
-1. Sign up, install their agent on the same box
-2. Map your local `127.0.0.1:25565` to a playit hostname
-3. Add an SRV record in Cloudflare:
-   - Type: `SRV`
-   - Name: `mcv` (or whatever subdomain you want)
-   - Service: `_minecraft`, Protocol: `TCP`
-   - Port: the port playit assigned
-   - Target: your playit hostname
-   - **Proxy: DNS only** (grey cloud — Cloudflare's HTTP proxy can't carry Minecraft traffic)
-
-Players type `mcv.brotalius.com` and Minecraft follows the SRV record automatically.
-
-For private friends-only setups, [Tailscale](https://tailscale.com) is a more secure alternative — no public IP at all, only people on your tailnet can connect.
+- **Backend binds to 127.0.0.1.** Never set `HOST=0.0.0.0`.
+- **Every state-changing endpoint re-checks the role server-side.** Frontend hiding is just UX.
+- **File paths from operators are sandboxed** against the server's folder root. The check is in `servers.js` — it's the most security-sensitive piece of code in the project.
+- **`is_super` should only be granted to people you fully trust.** Supers can change other users' passwords, access every server, and (if enabled) get a bash shell.
+- **The `/terminal` proxy is full root-equivalent inside the dashboard user's account.** Treat super-op like SSH.
+- **RCON passwords in `.env` should be long and unique per server.**
+- **Run the dashboard as a non-root user.** The example uses `admi`. Don't run anything in this stack as root.
+- **Cloudflare Tunnel credentials are sensitive** — they're effectively a router for your subdomain. Keep `~/.cloudflared/*.json` private.
 
 ---
 
-# security notes
-
-- The dashboard binds to `127.0.0.1`. Don't change `HOST` to `0.0.0.0`.
-- Every state-changing endpoint re-checks the role server-side — don't trust frontend hiding alone.
-- File paths from operators are sandboxed against the server's folder root. This is the most security-critical code in `servers.js`.
-- `is_super` should be granted to people you fully trust — supers can change other users' passwords and access every server.
-- The `/terminal` proxy gives bash access. Only super-operators reach it. Treat super-operator like root SSH.
-- RCON passwords in `.env` should be long and unique per server.
-- Run the dashboard as a non-root user (`admi`, `dashboard`, anything but root).
-- Keep your Cloudflare Tunnel credentials safe — they're effectively a router for your subdomain.
-
----
-
-# what's NOT in here (yet)
+# What's not included
 
 Things you might want to add later:
 
-- **2FA** — TOTP via `otplib` is straightforward to add
-- **Live log streaming** — `journalctl -fu mc-vanilla` over Server-Sent Events
-- **File upload** — for replacing jars / uploading mods (multipart endpoint)
-- **Email password reset** — currently you reset via CLI or another super-op
-- **Backup automation** — cron + restic/borg outside the dashboard
+- 2FA (TOTP) for login
+- Live log streaming (Server-Sent Events tailing `journalctl -fu mc-<name>`)
+- File uploads (e.g. replacing jars or uploading mods)
+- Email-based password reset
+- Automated backups
 
 The architecture supports adding any of these without major rework.
 
 ---
 
-# license
+# License
 
-Whatever you want. This was built for personal use — adapt freely.
+Personal project. Adapt freely.
