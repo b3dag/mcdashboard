@@ -55,8 +55,10 @@ INSTALL_DIR="/srv/dashboard"
 SUPER_USER=$(ask "super-operator username" "admin")
 while true; do
   read -s -p "$(echo -e ${YELLOW}?${NC} super-operator password [6+ chars]: )" SUPER_PASS; echo
-  [ ${#SUPER_PASS} -ge 6 ] && break
-  warn "too short. try again."
+  if [ ${#SUPER_PASS} -ge 6 ]; then
+    break
+  fi
+  warn "too short. minimum is 6 characters."
 done
 read -s -p "$(echo -e ${YELLOW}?${NC} confirm password: )" SUPER_PASS2; echo
 [ "$SUPER_PASS" = "$SUPER_PASS2" ] || fail "passwords don't match."
@@ -137,9 +139,18 @@ ok "SESSION_SECRET generated"
 # ----- 8. SUPER-OPERATOR -----
 info "creating super-operator '$SUPER_USER'..."
 # pipe password into create-user.js (it prompts twice for confirm)
-printf '%s\n%s\n' "$SUPER_PASS" "$SUPER_PASS" | node scripts/create-user.js "$SUPER_USER" --super >/dev/null 2>&1 \
-  || warn "user may already exist — skipping"
-ok "super-operator ready"
+CREATE_OUTPUT=$(printf '%s\n%s\n' "$SUPER_PASS" "$SUPER_PASS" | node scripts/create-user.js "$SUPER_USER" --super 2>&1) || true
+
+if echo "$CREATE_OUTPUT" | grep -q "created user"; then
+  ok "super-operator '$SUPER_USER' created"
+elif echo "$CREATE_OUTPUT" | grep -q "already exists"; then
+  warn "user '$SUPER_USER' already exists — skipping"
+else
+  warn "user creation failed:"
+  echo "$CREATE_OUTPUT" | sed 's/^/    /'
+  warn "you can create it manually after setup with:"
+  echo "    cd $INSTALL_DIR && node scripts/create-user.js $SUPER_USER --super"
+fi
 
 # ----- 9. DASHBOARD SERVICE -----
 info "installing dashboard systemd service..."
