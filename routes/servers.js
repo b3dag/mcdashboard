@@ -267,7 +267,10 @@ export default async function (app) {
   });
 
   /* ---- server creation ---- */
-  app.post('/api/servers/create', { preHandler: requireRole('operator') }, async (req, reply) => {
+  app.post('/api/servers/create', { preHandler: requireAuth }, async (req, reply) => {
+  if (!req.user.is_super) {
+    audit(req, 'server.create_denied', req.body.name, { reason: 'not_superuser' });
+    return reply.code(403).send({ error: 'Forbidden', detail: 'Super-operator access required' });
     const { name, display, type, version, port, rconPort, ramMax, ramMin } = req.body;
 
     // Security check for the server name
