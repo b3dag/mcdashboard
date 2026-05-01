@@ -26,6 +26,7 @@
 # =============================================================================
 
 set -e
+set -o pipefail
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; BLUE='\033[0;34m'; NC='\033[0m'
 info() { echo -e "${BLUE}==>${NC} $1"; }
@@ -33,6 +34,17 @@ ok()   { echo -e "${GREEN}✓${NC} $1"; }
 warn() { echo -e "${YELLOW}!${NC} $1"; }
 fail() { echo -e "${RED}✗${NC} $1"; exit 1; }
 ask()  { local p="$1" d="$2" v; read -p "$(echo -e ${YELLOW}?${NC} $p ${d:+[$d] })" v; echo "${v:-$d}"; }
+
+# verify a jar file downloaded correctly: exists, non-empty, and starts with PK (zip magic)
+verify_jar() {
+  local jar="$1"
+  [ -f "$jar" ]                || fail "download failed: $jar not created"
+  [ -s "$jar" ]                || fail "download failed: $jar is empty"
+  local size=$(stat -c %s "$jar")
+  [ "$size" -lt 100000 ]       && fail "download too small ($size bytes) — probably an error page, not a jar"
+  head -c 2 "$jar" | grep -q "PK" || fail "download isn't a valid jar (no PK header) — got an error page or HTML"
+  ok "verified: $(basename $jar) is $((size / 1024 / 1024))MB"
+}
 
 # ----- safety -----
 [ "$EUID" -eq 0 ] && fail "don't run as root. run as the user that owns /srv/dashboard."
@@ -108,22 +120,30 @@ info "downloading server jar..."
 case "$TYPE" in
   1) # vanilla
     # Use Mojang's launcher manifest API to find the right URL for the version
-    MANIFEST=$(curl -fsSL https://launchermeta.mojang.com/mc/game/version_manifest_v2.json)
+    MANIFEST=$(curl -fsSL https://launchermeta.mojang.com/mc/game/version_manifest_v2.json) \
+      || fail "couldn't fetch mojang manifest"
     VERSION_URL=$(echo "$MANIFEST" | jq -r --arg v "$MC_VERSION" '.versions[] | select(.id==$v) | .url' | head -1)
     [ -z "$VERSION_URL" ] && fail "minecraft version '$MC_VERSION' not found"
     SERVER_URL=$(curl -fsSL "$VERSION_URL" | jq -r '.downloads.server.url')
     [ -z "$SERVER_URL" ] && fail "couldn't find server jar URL"
-    curl -fsSL "$SERVER_URL" -o server.jar
+    rm -f server.jar
+    curl -fL --progress-bar "$SERVER_URL" -o server.jar || fail "vanilla jar download failed"
+    verify_jar server.jar
     LAUNCH_JAR="server.jar"
     ok "vanilla $MC_VERSION downloaded"
     ;;
   2) # fabric
-    curl -fsSL https://meta.fabricmc.net/v2/versions/loader/$MC_VERSION | head >/dev/null \
-      || fail "minecraft version '$MC_VERSION' not supported by fabric"
-    INSTALLER_VERSION=$(curl -fsSL https://meta.fabricmc.net/v2/versions/installer | jq -r '.[0].version')
-    LOADER_VERSION=$(curl -fsSL https://meta.fabricmc.net/v2/versions/loader | jq -r '.[0].version')
+    LOADER_VERSION=$(curl -fsSL https://meta.fabricmc.net/v2/versions/loader | jq -r '.[0].version') \
+      || fail "couldn't fetch fabric loader versions"
+    INSTALLER_VERSION=$(curl -fsSL https://meta.fabricmc.net/v2/versions/installer | jq -r '.[0].version') \
+      || fail "couldn't fetch fabric installer versions"
+    # Fabric server endpoint format:
+    #   /v2/versions/loader/<mc>/<loader>/<installer>/server/jar
     INSTALLER_URL="https://meta.fabricmc.net/v2/versions/loader/$MC_VERSION/$LOADER_VERSION/$INSTALLER_VERSION/server/jar"
-    curl -fsSL "$INSTALLER_URL" -o fabric-server-launch.jar
+    rm -f fabric-server-launch.jar server.jar
+    curl -fL --progress-bar "$INSTALLER_URL" -o fabric-server-launch.jar \
+      || fail "fabric jar download failed (check that mc version $MC_VERSION exists and is fabric-supported)"
+    verify_jar fabric-server-launch.jar
     LAUNCH_JAR="fabric-server-launch.jar"
     ok "fabric $MC_VERSION (loader $LOADER_VERSION) downloaded"
     ;;
@@ -132,7 +152,11 @@ case "$TYPE" in
       || fail "minecraft version '$MC_VERSION' not supported by paper"
     BUILD=$(echo "$BUILDS" | jq -r '.builds[-1].build')
     JAR_NAME=$(echo "$BUILDS" | jq -r '.builds[-1].downloads.application.name')
-    curl -fsSL "https://api.papermc.io/v2/projects/paper/versions/$MC_VERSION/builds/$BUILD/downloads/$JAR_NAME" -o server.jar
+    [ -z "$BUILD" ] || [ "$BUILD" = "null" ] && fail "no paper builds found for $MC_VERSION"
+    rm -f server.jar
+    curl -fL --progress-bar "https://api.papermc.io/v2/projects/paper/versions/$MC_VERSION/builds/$BUILD/downloads/$JAR_NAME" -o server.jar \
+      || fail "paper jar download failed"
+    verify_jar server.jar
     LAUNCH_JAR="server.jar"
     ok "paper $MC_VERSION build $BUILD downloaded"
     ;;
