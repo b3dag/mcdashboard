@@ -54,14 +54,19 @@ INSTALL_DIR="/srv/dashboard"
 # super-operator
 SUPER_USER=$(ask "super-operator username" "admin")
 while true; do
-  read -s -p "$(echo -e ${YELLOW}?${NC} super-operator password [6+ chars]: )" SUPER_PASS; echo
-  if [ ${#SUPER_PASS} -ge 6 ]; then
+  while true; do
+    read -s -p "$(echo -e ${YELLOW}?${NC} super-operator password [6+ chars]: )" SUPER_PASS; echo
+    if [ ${#SUPER_PASS} -ge 6 ]; then
+      break
+    fi
+    warn "too short. minimum is 6 characters."
+  done
+  read -s -p "$(echo -e ${YELLOW}?${NC} confirm password: )" SUPER_PASS2; echo
+  if [ "$SUPER_PASS" = "$SUPER_PASS2" ]; then
     break
   fi
-  warn "too short. minimum is 6 characters."
+  warn "passwords don't match. try again."
 done
-read -s -p "$(echo -e ${YELLOW}?${NC} confirm password: )" SUPER_PASS2; echo
-[ "$SUPER_PASS" = "$SUPER_PASS2" ] || fail "passwords don't match."
 
 # tunnel
 echo
