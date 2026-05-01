@@ -2,10 +2,11 @@
    db.js — SQLite database setup and schema.
    ---------------------------------------------------------
    Tables:
-     users        : dashboard accounts
-     permissions  : per-server roles for each user
-     sessions     : active login sessions
-     audit_log    : append-only record of state-changing actions
+     users           : dashboard accounts
+     permissions     : per-server roles for each user
+     sessions        : active login sessions
+     audit_log       : append-only record of state-changing actions
+     server_settings : per-server runtime settings (key/value)
    ========================================================= */
 
 import Database from 'better-sqlite3';
@@ -61,6 +62,13 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts DESC);
+
+  CREATE TABLE IF NOT EXISTS server_settings (
+    server_name TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    PRIMARY KEY (server_name, key)
+  );
 `);
 
 export const stmts = {
@@ -101,6 +109,13 @@ export const stmts = {
     SELECT ts, username, ip, action, target, details
     FROM audit_log ORDER BY ts DESC LIMIT ?
   `),
+
+  getServerSetting:    db.prepare('SELECT value FROM server_settings WHERE server_name = ? AND key = ?'),
+  setServerSetting:    db.prepare(`
+    INSERT INTO server_settings (server_name, key, value) VALUES (?, ?, ?)
+    ON CONFLICT(server_name, key) DO UPDATE SET value = excluded.value
+  `),
+  getAllServerSettings: db.prepare('SELECT server_name, key, value FROM server_settings'),
 };
 
 setInterval(() => {

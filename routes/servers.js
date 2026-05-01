@@ -6,11 +6,13 @@ import {
   rconCommand,
   listFiles, readServerFile, writeServerFile,
   getServerLogs, streamServerLogs,
+  getAutoStopMinutes, setAutoStopMinutes,
 } from '../servers.js';
 import { audit } from '../audit.js';
 import { requireAuth, requireRole } from '../roles.js';
 
 const MC_USERNAME = /^[a-zA-Z0-9_]{3,16}$/;
+const ALLOWED_AUTO_STOP = [0, 5, 15, 30, 60, 120];
 
 function visibleServers(user) {
   const all = listServers();
@@ -109,6 +111,26 @@ export default async function (app) {
 
     const stream = streamServerLogs(name);
     return reply.send(stream);
+  });
+
+  /* auto-stop config */
+  app.get('/api/servers/:name/auto-stop', { preHandler: requireRole('operator') }, async (req, reply) => {
+    if (!getServer(req.params.name)) return reply.code(404).send({ error: 'unknown server' });
+    return { minutes: getAutoStopMinutes(req.params.name) };
+  });
+
+  app.put('/api/servers/:name/auto-stop', { preHandler: requireRole('operator') }, async (req, reply) => {
+    const minutes = parseInt(req.body?.minutes, 10);
+    if (!ALLOWED_AUTO_STOP.includes(minutes)) {
+      return reply.code(400).send({ error: 'minutes must be one of: ' + ALLOWED_AUTO_STOP.join(', ') });
+    }
+    try {
+      setAutoStopMinutes(req.params.name, minutes);
+      audit(req, 'auto-stop.set', req.params.name, { minutes });
+      return { ok: true, minutes };
+    } catch (e) {
+      return reply.code(400).send({ error: e.message });
+    }
   });
 
   app.get('/api/servers/:name/files', { preHandler: requireRole('operator') }, async (req, reply) => {

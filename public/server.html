@@ -46,12 +46,6 @@
     }
     .mc-pip.full  { opacity: 1; }
     .mc-pip.half  { opacity: 1; position: relative; overflow: hidden; background: transparent !important; }
-    .mc-pip.half::before {
-      content: '';
-      position: absolute;
-      left: 0; top: 0;
-      width: 50%; height: 100%;
-    }
     .mc-pip.empty { opacity: 0.18; }
   </style>
 </head>
@@ -209,7 +203,6 @@
         plStatus.textContent = '';
         try {
           const listResult = await rcon('list');
-          /* "There are 2 of a max of 20 players online: mael, hellmut" */
           const match = listResult.match(/:\s*(.+)$/);
           const names = match && match[1].trim()
             ? match[1].split(',').map(n => n.trim()).filter(Boolean)
@@ -263,12 +256,9 @@
                   const half = el('div', {});
                   half.style.cssText = 'position:absolute;left:0;top:0;width:50%;height:100%;background:' + color;
                   pip.appendChild(half);
-                } else if (state === 'empty') {
-                  pip.style.background = color;
                 }
                 return pip;
               }
-
               function makeBar(value, color) {
                 const bar = el('div', { class: 'mc-bar' });
                 for (let i = 0; i < 10; i++) {
@@ -286,7 +276,6 @@
                 card.appendChild(el('div', { class: 'player-detail' }, 'health: ' + hp.toFixed(1) + ' / 20'));
                 card.appendChild(makeBar(hp, '#e05252'));
               }
-
               if (food !== null) {
                 card.appendChild(el('div', { class: 'player-detail' }, 'food:   ' + food + ' / 20'));
                 card.appendChild(makeBar(food, '#c8a030'));
@@ -304,6 +293,48 @@
       }
 
       if (server.running) loadPlayers();
+
+      /* ---- auto-stop ---- */
+      const asBody = collapsible('auto-stop', true);
+      asBody.appendChild(el('p', { class: 'muted' },
+        'automatically stop the server when no players are online for the chosen duration. ' +
+        'checked once per minute.'));
+      const asSelect = el('select', {}, [
+        el('option', { value: '0'   }, 'off (never auto-stop)'),
+        el('option', { value: '5'   }, '5 minutes'),
+        el('option', { value: '15'  }, '15 minutes'),
+        el('option', { value: '30'  }, '30 minutes'),
+        el('option', { value: '60'  }, '1 hour'),
+        el('option', { value: '120' }, '2 hours'),
+      ]);
+      const asStatus = el('span', { class: 'muted' }, 'loading...');
+      asBody.appendChild(el('div', { class: 'row' }, [asSelect, asStatus]));
+
+      try {
+        const r = await api('/api/servers/' + name + '/auto-stop');
+        asSelect.value = String(r.minutes);
+        asStatus.textContent = '';
+      } catch (err) {
+        asStatus.textContent = 'error: ' + err.message;
+      }
+
+      asSelect.addEventListener('change', async () => {
+        const minutes = parseInt(asSelect.value, 10);
+        const previous = asSelect.dataset.previous || '0';
+        asStatus.textContent = 'saving...';
+        try {
+          await api('/api/servers/' + name + '/auto-stop', {
+            method: 'PUT', body: { minutes },
+          });
+          asSelect.dataset.previous = String(minutes);
+          asStatus.textContent = 'saved.';
+          setTimeout(() => { asStatus.textContent = ''; }, 1500);
+        } catch (err) {
+          asSelect.value = previous;
+          asStatus.textContent = 'error: ' + err.message;
+        }
+      });
+      asSelect.dataset.previous = asSelect.value;
 
       /* ---- game log (logs/latest.log) ---- */
       const glBody    = collapsible('game log', true);

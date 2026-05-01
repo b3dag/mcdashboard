@@ -7,6 +7,8 @@ import { resolve, relative, isAbsolute, join, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Rcon } from 'rcon-client';
 
+import { stmts } from './db.js';
+
 const cfg = JSON.parse(
   await readFile(new URL('./servers.json', import.meta.url), 'utf8')
 );
@@ -72,11 +74,7 @@ export async function getServerStatus(name) {
   return { running };
 }
 
-/* ---------- logs ----------
-   Both functions ask `journalctl --user` for output from the
-   server's systemd unit. getServerLogs returns a string for
-   inline display; streamServerLogs returns a stream that the
-   download endpoint pipes straight to the response. */
+/* ---------- logs ---------- */
 
 export async function getServerLogs(name, lines = 200) {
   const s = getServer(name);
@@ -95,13 +93,11 @@ export function streamServerLogs(name) {
   const s = getServer(name);
   if (!s) throw new Error('unknown server');
 
-  /* spawn journalctl returning the entire unit log on stdout */
   const p = spawn('journalctl', [
     '--user', '-u', s.systemd_unit,
     '--no-pager', '--output=short-iso',
   ]);
   p.stdin.end();
-  /* swallow stderr so it doesn't end up mixed into the download */
   p.stderr.on('data', () => {});
   return p.stdout;
 }
@@ -127,6 +123,34 @@ export async function rconCommand(name, command) {
   } finally {
     await client.end().catch(() => {});
   }
+}
+
+/* Number of online players via RCON `list`. Returns null if it
+   couldn't be determined (RCON failed, server not running, etc.) */
+export async function getOnlinePlayerCount(name) {
+  try {
+    const result = await rconCommand(name, 'list');
+    /* "There are 2 of a max of 20 players online: ..." */
+    const m = result.match(/There are\s+(\d+)\s+of/i);
+    if (!m) return null;
+    return parseInt(m[1], 10);
+  } catch {
+    return null;
+  }
+}
+
+/* ---------- per-server settings ---------- */
+
+export function getAutoStopMinutes(name) {
+  const row = stmts.getServerSetting.get(name, 'auto_stop_minutes');
+  return row ? parseInt(row.value, 10) : 0;
+}
+
+export function setAutoStopMinutes(name, minutes) {
+  if (!getServer(name)) throw new Error('unknown server');
+  const value = parseInt(minutes, 10);
+  if (isNaN(value) || value < 0) throw new Error('invalid value');
+  stmts.setServerSetting.run(name, 'auto_stop_minutes', String(value));
 }
 
 /* ---------- sandboxed file access ---------- */

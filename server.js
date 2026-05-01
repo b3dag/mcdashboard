@@ -7,6 +7,7 @@
      - api routes for auth / servers / users
      - optional proxy to a local ttyd at 127.0.0.1:7681 (super-only)
      - static dashboard pages from /public
+     - background auto-stop loop for idle Minecraft servers
    ========================================================= */
 
 import { readFileSync } from 'node:fs';
@@ -24,6 +25,8 @@ import { loadUserFromCookie } from './auth.js';
 import authRoutes from './routes/auth.js';
 import serverRoutes from './routes/servers.js';
 import userRoutes from './routes/users.js';
+
+import { startAutoStop } from './auto-stop.js';
 
 /* load .env */
 function loadEnv() {
@@ -108,3 +111,6 @@ try {
   app.log.error(err);
   process.exit(1);
 }
+
+/* ---------- background jobs ---------- */
+startAutoStop(app.log);
