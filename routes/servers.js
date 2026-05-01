@@ -267,7 +267,7 @@ export default async function (app) {
   });
 
   /* ---- server creation ---- */
-  app.post('/api/servers/create', { preHandler: requireSuper }, async (req, reply) => {
+  app.post('/api/servers/create', { preHandler: requireRole('operator') }, async (req, reply) => {
     const { name, display, type, version, port, rconPort, ramMax, ramMin } = req.body;
 
     // Security check for the server name
