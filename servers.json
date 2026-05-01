@@ -1,17 +1,5 @@
 {
-  "_comment": "Registry of Minecraft servers the dashboard manages. The 'name' is what shows in the UI, in URLs, and is used for permission checks. The 'systemd_unit' is what gets started/stopped. The 'rcon' block tells the backend how to send in-game commands. Add or remove entries here, then restart the dashboard. Names must be lowercase a-z, 0-9, or hyphens.",
+  "_comment": "Registry of Minecraft servers the dashboard manages. The 'name' is what shows in the UI, in URLs, and is used for permission checks. The 'systemd_unit' is what gets started/stopped. The 'rcon' block tells the backend how to send in-game commands. Add or remove entries here (or use addserver.sh), then restart the dashboard. Names must be lowercase a-z, 0-9, or hyphens.",
 
-  "servers": [
-    {
-      "name": "vanilla",
-      "display_name": "Vanilla",
-      "folder": "/srv/mcserv/fabric01",
-      "systemd_unit": "mc-vanilla.service",
-      "rcon": {
-        "host": "127.0.0.1",
-        "port": 25575,
-        "password_env": "RCON_PASSWORD_VANILLA"
-      }
-    }
-  ]
+  "servers": []
 }

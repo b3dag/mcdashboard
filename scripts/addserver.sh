@@ -43,7 +43,11 @@ verify_jar() {
   local size=$(stat -c %s "$jar")
   [ "$size" -lt 100000 ]       && fail "download too small ($size bytes) — probably an error page, not a jar"
   head -c 2 "$jar" | grep -q "PK" || fail "download isn't a valid jar (no PK header) — got an error page or HTML"
-  ok "verified: $(basename $jar) is $((size / 1024 / 1024))MB"
+  if [ "$size" -lt 10485760 ]; then
+    ok "verified: $(basename $jar) is $((size / 1024))KB"
+  else
+    ok "verified: $(basename $jar) is $((size / 1024 / 1024))MB"
+  fi
 }
 
 # ----- safety -----
@@ -170,11 +174,38 @@ echo "eula=true" > eula.txt
 ok "EULA accepted"
 
 # ----- first run to generate server.properties -----
-info "first-running the server to generate config files (10-30 sec)..."
-timeout 90 java -Xmx"$RAM_MAX" -jar "$LAUNCH_JAR" nogui >/dev/null 2>&1 || true
+info "first-running the server to generate config files..."
+info "(this can take 2-5 minutes for fabric — it downloads minecraft + libraries)"
+info "watching for server.properties to appear, then stopping the server..."
+
+# Run server in background, watch for server.properties to appear
+java -Xmx"$RAM_MAX" -jar "$LAUNCH_JAR" nogui > /tmp/mcfirstrun.log 2>&1 &
+JAVA_PID=$!
+
+# Wait up to 5 minutes for server.properties to appear AND have content
+for i in {1..300}; do
+  if [ -f server.properties ] && [ -s server.properties ]; then
+    sleep 5  # let it finish writing other files
+    break
+  fi
+  if ! kill -0 $JAVA_PID 2>/dev/null; then
+    # Java exited — check if properties got generated
+    break
+  fi
+  sleep 1
+done
+
+# Stop the java process gracefully
+if kill -0 $JAVA_PID 2>/dev/null; then
+  kill $JAVA_PID 2>/dev/null
+  sleep 2
+  kill -9 $JAVA_PID 2>/dev/null || true
+fi
 
 if [ ! -f server.properties ]; then
-  fail "server didn't generate server.properties. check $FOLDER manually."
+  warn "server.properties not generated. last 30 lines of server output:"
+  tail -30 /tmp/mcfirstrun.log | sed 's/^/    /'
+  fail "first-run failed. check $FOLDER and /tmp/mcfirstrun.log"
 fi
 ok "server.properties generated"
 

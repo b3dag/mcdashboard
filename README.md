@@ -150,7 +150,7 @@ In `.env`, set:
 | Variable | What to put |
 | --- | --- |
 | `SESSION_SECRET` | The random string you just generated |
-| `RCON_PASSWORD_VANILLA` | The RCON password from your first server's `server.properties` (set this in step 6) |
+| `RCON_PASSWORD_<NAME>` | One per Minecraft server (e.g. `RCON_PASSWORD_CREATIVE01`). `addserver.sh` adds these automatically; if adding a server manually, you'll set this when you create the systemd unit. |
 | `TERMINAL_ENABLED` | `true` if you want the in-browser bash shell, otherwise leave unset |
 
 Don't touch `HOST` — it should stay `127.0.0.1`.
@@ -396,8 +396,8 @@ RCON_PASSWORD_CREATIVE01=YOUR_LONG_RANDOM_PASSWORD_HERE
 > - Match (case-insensitively) the server name with hyphens replaced by underscores
 >
 > Examples:
-> - server `vanilla` → `RCON_PASSWORD_VANILLA`
 > - server `creative01` → `RCON_PASSWORD_CREATIVE01`
+> - server `survival` → `RCON_PASSWORD_SURVIVAL`
 > - server `create-astral` → `RCON_PASSWORD_CREATE_ASTRAL`
 >
 > The password must exactly match what you wrote in `server.properties`.
