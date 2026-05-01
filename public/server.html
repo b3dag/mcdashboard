@@ -50,7 +50,7 @@
     }
     .chart-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); /* Increased for wider charts */
       gap: 1rem;
       margin-top: 0.75rem;
     }
@@ -162,12 +162,21 @@
       let dataMax = Math.max(...valid, 0.1); 
       let max = fixedMax;
       
-      // If no fixedMax is provided (like Memory and Disk), calculate a clean, whole number
+      // If no fixedMax is provided, calculate a proper "nice number" max for smooth chart scaling
       if (!max) {
-        let m = Math.ceil(dataMax);
-        // Force the maximum to be divisible by 4, so the 5 grid lines land on clean integers
-        while (m % 4 !== 0) m++;
-        max = m;
+        const roughStep = dataMax / 4;
+        const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)));
+        const normalizedStep = roughStep / magnitude;
+        
+        let niceStep;
+        if (normalizedStep <= 1) niceStep = 1;
+        else if (normalizedStep <= 2) niceStep = 2;
+        else if (normalizedStep <= 2.5) niceStep = 2.5;
+        else if (normalizedStep <= 5) niceStep = 5;
+        else niceStep = 10;
+        
+        const step = niceStep * magnitude;
+        max = step * 4;
       }
 
       const padding = 20;
@@ -193,8 +202,8 @@
         ctx.lineTo(w - rightSpace, y);
         ctx.stroke();
 
-        // Draw the text label nicely formatted
-        let label = (val % 1 === 0) ? val.toString() : val.toFixed(1);
+        // Draw the text label cleanly (drops unnecessary zeroes automatically)
+        let label = Number(val.toFixed(2)).toString();
         ctx.fillText(label + unit, w - 8, y);
       }
 
