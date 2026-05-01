@@ -50,9 +50,9 @@ export async function renderHeader(active) {
   if (!me) { location.href = '/login.html'; return null; }
 
   const nav = el('nav', {}, [
-    el('a', { href: '/index.html',  class: active === 'home'  ? 'active' : '' }, 'servers'),
-    me.is_super ? el('a', { href: '/users.html',    class: active === 'users'    ? 'active' : '' }, 'users') : null,
-    me.is_super ? el('a', { href: '/audit.html',    class: active === 'audit'    ? 'active' : '' }, 'audit') : null,
+    el('a', { href: '/index.html', class: active === 'home' ? 'active' : '' }, 'servers'),
+    me.is_super ? el('a', { href: '/users.html',    class: active === 'users'    ? 'active' : '' }, 'users')    : null,
+    me.is_super ? el('a', { href: '/audit.html',    class: active === 'audit'    ? 'active' : '' }, 'audit')    : null,
     me.is_super ? el('a', { href: '/terminal.html', class: active === 'terminal' ? 'active' : '' }, 'terminal') : null,
     el('a', { href: '/account.html', class: active === 'account' ? 'active' : '' }, 'account'),
     el('a', { href: '#', onclick: (e) => { e.preventDefault(); logout(); } }, 'log out'),
