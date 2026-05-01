@@ -216,24 +216,88 @@ echo "the dashboard is running locally:    http://127.0.0.1:8080"
 echo "log in as:                           $SUPER_USER"
 echo
 
+# ----- 12. CLOUDFLARE TUNNEL (interactive but inline) -----
 if [[ $DO_TUNNEL =~ ^[Yy]$ ]]; then
-  echo -e "${YELLOW}two things you have to do for the tunnel${NC} (cloudflared needs your browser):"
+
+  if [ ! -f "$HOME/.cloudflared/cert.pem" ]; then
+    echo
+    echo -e "${YELLOW}========================================${NC}"
+    echo -e "${YELLOW}  cloudflare login (one-time)           ${NC}"
+    echo -e "${YELLOW}========================================${NC}"
+    echo
+    echo "i'm going to run 'cloudflared tunnel login' now."
+    echo "it will print a URL. open that URL in your browser,"
+    echo "log into cloudflare, and click 'Authorize'."
+    echo
+    echo "this script will wait until you do that. take your time."
+    echo
+    read -p "press enter to start..."
+    echo
+
+    cloudflared tunnel login
+    echo
+
+    if [ ! -f "$HOME/.cloudflared/cert.pem" ]; then
+      fail "cloudflared login didn't complete. run setup again or do it manually."
+    fi
+    ok "cloudflared authenticated"
+  else
+    ok "cloudflared already authenticated (cert.pem exists)"
+  fi
+
+  # ----- create tunnel (skip if exists) -----
+  info "creating tunnel '$TUNNEL_NAME'..."
+  EXISTING=$(cloudflared tunnel list 2>/dev/null | awk -v n="$TUNNEL_NAME" '$2==n {print $1}' | head -1)
+  if [ -n "$EXISTING" ]; then
+    TUNNEL_ID="$EXISTING"
+    ok "tunnel '$TUNNEL_NAME' already exists (id: $TUNNEL_ID)"
+  else
+    cloudflared tunnel create "$TUNNEL_NAME" 2>&1 | sed 's/^/    /'
+    TUNNEL_ID=$(cloudflared tunnel list 2>/dev/null | awk -v n="$TUNNEL_NAME" '$2==n {print $1}' | head -1)
+    [ -z "$TUNNEL_ID" ] && fail "couldn't find tunnel id after creation."
+    ok "tunnel created with id: $TUNNEL_ID"
+  fi
+
+  # ----- route DNS -----
+  info "routing DNS: $TUNNEL_HOSTNAME -> $TUNNEL_NAME..."
+  cloudflared tunnel route dns "$TUNNEL_NAME" "$TUNNEL_HOSTNAME" 2>&1 | sed 's/^/    /' || true
+  ok "DNS routed"
+
+  # ----- write config.yml -----
+  info "writing ~/.cloudflared/config.yml..."
+  mkdir -p "$HOME/.cloudflared"
+  cat > "$HOME/.cloudflared/config.yml" <<EOF
+tunnel: $TUNNEL_ID
+credentials-file: $HOME/.cloudflared/$TUNNEL_ID.json
+
+ingress:
+  - hostname: $TUNNEL_HOSTNAME
+    service: http://127.0.0.1:8080
+  - service: http_status:404
+EOF
+  ok "config.yml written"
+
+  # ----- systemd unit -----
+  info "installing cloudflared systemd unit..."
+  if [ -f "$INSTALL_DIR/systemd/cloudflared.service" ]; then
+    cp "$INSTALL_DIR/systemd/cloudflared.service" "$HOME/.config/systemd/user/"
+    sed -i "s|tunnel run [a-zA-Z0-9_-]*|tunnel run $TUNNEL_NAME|" "$HOME/.config/systemd/user/cloudflared.service"
+
+    systemctl --user daemon-reload
+    systemctl --user enable --now cloudflared
+    sleep 2
+
+    if systemctl --user is-active --quiet cloudflared; then
+      ok "cloudflared running"
+    else
+      warn "cloudflared service failed to start. check: journalctl --user -u cloudflared --no-pager -n 30"
+    fi
+  else
+    warn "$INSTALL_DIR/systemd/cloudflared.service not found — skipping service install."
+  fi
+
   echo
-  echo "  1. authenticate (opens a browser link):"
-  echo "       cloudflared tunnel login"
-  echo
-  echo "  2. create the tunnel and route DNS:"
-  echo "       cloudflared tunnel create $TUNNEL_NAME"
-  echo "       cloudflared tunnel route dns $TUNNEL_NAME $TUNNEL_HOSTNAME"
-  echo
-  echo "  3. fill in the tunnel id in ~/.cloudflared/config.yml,"
-  echo "     then copy the systemd unit and start it:"
-  echo "       cp $INSTALL_DIR/systemd/cloudflared.service ~/.config/systemd/user/"
-  echo "       sed -i \"s|run brotalius-dash|run $TUNNEL_NAME|\" ~/.config/systemd/user/cloudflared.service"
-  echo "       systemctl --user daemon-reload"
-  echo "       systemctl --user enable --now cloudflared"
-  echo
-  echo "  then visit:  https://$TUNNEL_HOSTNAME"
+  echo -e "${GREEN}your dashboard is live:${NC}  https://$TUNNEL_HOSTNAME"
 fi
 
 echo
