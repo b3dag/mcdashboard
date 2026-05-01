@@ -2,7 +2,7 @@
 /* =========================================================
    scripts/create-user.js — bootstrap a dashboard user.
    ---------------------------------------------------------
-   Run from the project root:
+   Run from the project root: 
      node scripts/create-user.js <username> [--super]
    ========================================================= */
 
