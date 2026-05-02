@@ -3,7 +3,7 @@
    ========================================================= */
 
 import { readFile, writeFile, readdir, stat, mkdir, rename, rm } from 'node:fs/promises';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { resolve, relative, isAbsolute, join, sep, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
