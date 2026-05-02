@@ -9,6 +9,9 @@
    GUI mode (called from routes/servers.js with arguments):
      node scripts/add-server.js <name> <display> <type> <version> <port> <rconPort> <ramMax> <ramMin>
 
+   Note: rconPort arg is ignored — it's always derived as `port + 1000`.
+   Pass 0 for port to auto-pick the lowest free MC port.
+
    In GUI mode, progress is written to:
      /tmp/mcsetup-<name>.json
    so the frontend can poll GET /api/servers/create/status?name=<name>
@@ -84,10 +87,22 @@ async function download(url, dest) {
   if (size < 100000) throw new Error(`downloaded file too small (${size} bytes) — probably an error page`);
 }
 
-/* helper to find lowest free port starting from `from`, skipping any in `taken` */
+/* helper to find lowest free port starting from `from`,
+   skipping any in `taken` AND any actually bound on the OS */
+function isPortBoundOnOS(port) {
+  try {
+    // ss is faster and lighter than lsof
+    const out = execSync(`ss -ltn 'sport = :${port}'`, { encoding: 'utf8' });
+    // ss prints a header line; if there's a second line, port is bound
+    return out.trim().split('\n').length > 1;
+  } catch {
+    return false;
+  }
+}
+
 function pickFreePort(taken, from) {
   let p = from;
-  while (taken.has(p)) p++;
+  while (taken.has(p) || isPortBoundOnOS(p)) p++;
   return p;
 }
 
@@ -109,13 +124,17 @@ async function run() {
   if (isGui) {
     /* ---- GUI mode: args passed from the API ---- */
     [name, displayName, typeChoice, mcVersion, port, rconPort, ramMax, ramMin] = args;
-    port     = parseInt(port, 10);
-    rconPort = parseInt(rconPort, 10);
+    port = parseInt(port, 10);
 
-    // 0 means "auto-pick" — pick lowest available
-    if (!port || port === 0)         port = pickFreePort(usedPorts, 25565);
-    usedPorts.add(port);
-    if (!rconPort || rconPort === 0) rconPort = pickFreePort(usedPorts, 25575);
+    // 0 means "auto-pick" — pick lowest available MC port (RCON = port + 1000)
+    if (!port || port === 0) {
+      port = pickFreePort(usedPorts, 25565);
+      // make sure port + 1000 is also free; if not, jump higher
+      while (usedPorts.has(port + 1000) || isPortBoundOnOS(port + 1000)) {
+        port = pickFreePort(usedPorts, port + 1);
+      }
+    }
+    rconPort = port + 1000;
 
     if (serversCfg.servers.some(s => s.name === name)) abort(`A server named '${name}' already exists.`);
     progress('init', `starting setup for ${name} (port ${port}, rcon ${rconPort})`);
@@ -147,21 +166,49 @@ async function run() {
     typeChoice = await ask('choice (1/2/3)', '1');
     mcVersion  = await ask('minecraft version', '1.21.1');
 
-    // auto-pick ports — no prompts in CLI mode either
-    port     = pickFreePort(usedPorts, 25565); usedPorts.add(port);
-    rconPort = pickFreePort(usedPorts, 25575);
+    // auto-pick MC port; RCON is always port + 1000
+    port = pickFreePort(usedPorts, 25565);
+    while (usedPorts.has(port + 1000) || isPortBoundOnOS(port + 1000)) {
+      port = pickFreePort(usedPorts, port + 1);
+    }
+    rconPort = port + 1000;
 
     ramMax = await ask('max RAM (e.g. 4G, 8G)', '4G');
     ramMin = await ask('min RAM', '2G');
     rl.close();
 
-    console.log(`\nports auto-selected: minecraft ${port}, rcon ${rconPort}`);
+    console.log(`\nports auto-selected: minecraft ${port}, rcon ${rconPort} (=port+1000)`);
     console.log('\n\x1b[32mgot it. running setup...\x1b[0m\n');
   }
 
+  /* ---- pre-flight checks (after we know name and ports) ---- */
+  const folder = path.join(MCSERV_ROOT, name);
+  const unitPath = path.join(process.env.HOME, '.config/systemd/user', `mc-${name}.service`);
+
+  // folder must not already exist with content
+  if (existsSync(folder)) {
+    try {
+      const fs = await import('node:fs');
+      const items = fs.readdirSync(folder);
+      if (items.length > 0) {
+        abort(`Folder ${folder} already exists and is not empty. Pick a different name or delete the folder first.`);
+      }
+    } catch (e) {
+      abort(`Could not check folder ${folder}: ${e.message}`);
+    }
+  }
+
+  // systemd unit must not already exist
+  if (existsSync(unitPath)) {
+    abort(`Systemd unit ${unitPath} already exists. Pick a different name or remove the old unit.`);
+  }
+
+  // double-check ports aren't bound on the OS right now
+  if (isPortBoundOnOS(port))     abort(`Port ${port} is already in use by something on this server.`);
+  if (isPortBoundOnOS(rconPort)) abort(`RCON port ${rconPort} is already in use by something on this server.`);
+
   /* ---- setup ---- */
   const rconPw = crypto.randomBytes(16).toString('hex');
-  const folder = path.join(MCSERV_ROOT, name);
 
   progress('folder', `creating ${folder}`);
   await mkdir(folder, { recursive: true });

@@ -70,17 +70,11 @@
       </div>
       <div class="advanced-body" id="advanced-body">
         <p class="muted" style="font-size: 0.85rem; margin-bottom: 0.5rem;">
-          leave these alone unless you know what you're doing. ports auto-pick if blank.
+          leave blank to auto-pick. RCON port is always the game port + 1000.
         </p>
-        <div class="row">
-          <div class="form-group" style="flex: 1;">
-            <label for="port">game port</label>
-            <input type="number" id="port" placeholder="auto" />
-          </div>
-          <div class="form-group" style="flex: 1;">
-            <label for="rconPort">rcon port</label>
-            <input type="number" id="rconPort" placeholder="auto" />
-          </div>
+        <div class="form-group">
+          <label for="port">game port</label>
+          <input type="number" id="port" placeholder="auto (e.g. 25565 → rcon 26565)" />
         </div>
         <div class="row">
           <div class="form-group" style="flex: 1;">
@@ -151,8 +145,7 @@
         display: document.getElementById('display').value.trim(),
         type:    document.getElementById('type').value,
         version: document.getElementById('version').value.trim(),
-        port:     parseInt(document.getElementById('port').value, 10) || 0,
-        rconPort: parseInt(document.getElementById('rconPort').value, 10) || 0,
+        port:    parseInt(document.getElementById('port').value, 10) || 0,
         ramMax:  document.getElementById('ramMax').value.trim() || '4G',
         ramMin:  document.getElementById('ramMin').value.trim() || '2G',
       };

@@ -11,6 +11,7 @@ import {
   getServerLogs, streamServerLogs,
   getAutoStopMinutes, setAutoStopMinutes,
   getOnlinePlayerCount,
+  removeServer,
 } from '../servers.js';
 import {
   listWorldFolders, downloadWorldZip, uploadAndReplaceWorld,
@@ -308,7 +309,7 @@ export default async function (app) {
 
   /* ---- server creation ---- */
   app.post('/api/servers/create', { preHandler: requireSuper }, async (req, reply) => {
-    const { name, display, type, version, port, rconPort, ramMax, ramMin } = req.body || {};
+    const { name, display, type, version, port, ramMax, ramMin } = req.body || {};
 
     if (!name || !/^[a-z0-9-]+$/.test(name)) {
       return reply.code(400).send({ error: 'Invalid name (lowercase, numbers, and hyphens only)' });
@@ -334,7 +335,7 @@ export default async function (app) {
     const scriptPath = path.join(process.cwd(), 'scripts', 'add-server.js');
 
     const child = spawn(process.execPath, [scriptPath,
-      name, display, type, version, String(port || 0), String(rconPort || 0), ramMax || '4G', ramMin || '2G'
+      name, display, type, version, String(port || 0), '0', ramMax || '4G', ramMin || '2G'
     ], {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -366,6 +367,30 @@ export default async function (app) {
       return data;
     } catch {
       return reply.code(500).send({ error: 'could not read status file' });
+    }
+  });
+
+  /* ---- remove server ---- */
+  app.delete('/api/servers/:name', { preHandler: requireSuper }, async (req, reply) => {
+    const name = req.params.name;
+    const { confirmName, deleteFiles = false } = req.body || {};
+
+    // belt-and-suspenders: require the client to send the same name as the URL param
+    if (confirmName !== name) {
+      return reply.code(400).send({ error: 'confirmName must match the server name' });
+    }
+
+    if (!getServer(name)) {
+      return reply.code(404).send({ error: 'unknown server' });
+    }
+
+    try {
+      const result = await removeServer(name, { deleteFiles: !!deleteFiles });
+      audit(req, 'server.remove', name, { deleteFiles: !!deleteFiles, ...result });
+      return { ok: true, ...result };
+    } catch (e) {
+      audit(req, 'server.remove_failed', name, { error: e.message });
+      return reply.code(500).send({ error: e.message });
     }
   });
 
