@@ -16,6 +16,7 @@ const cfg = JSON.parse(
 );
 
 const REGISTRY = new Map();
+const DASHBOARD = '/srv/dashboard';
 for (const s of cfg.servers) {
   if (!/^[a-z0-9-]+$/.test(s.name)) {
     throw new Error(`invalid server name: ${s.name}`);
