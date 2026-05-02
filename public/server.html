@@ -292,11 +292,10 @@
         ]);
 
         metricsStatus.textContent = '';
+        const last = points[points.length - 1] || {};
         const points = metrics.metrics || [];
-        // Check for health alerts based on your monitor.js logic
         const isHighCpu = last.cpu > 90;
-        // Assuming 4G limit as used in your monitor.js helper
-        const isHighMem = last.memory > (4 * 1024 * 1024 * 1024 * 0.95); 
+        const isHighMem = last.memory > (4 * 1024 * 1024 * 1024 * 0.95);
 
         if (isHighCpu || isHighMem) {
           const reason = isHighCpu ? 'High CPU' : 'High RAM Usage';
@@ -306,7 +305,6 @@
             </div>`;
         }
         
-    // ... keep the rest of your chart drawing code ...
         // CPU passes '100' at the end to lock the maximum scale to 100%
         drawLineChart(cpuCanvas, points.map(p => p.cpu), '#4caf50', '%', 100);
         
@@ -316,7 +314,6 @@
         // Disk stays the same
         drawLineChart(diskCanvas, points.map(p => p.disk ? p.disk / 1024 / 1024 / 1024 : null), '#f4b400', ' GB');
 
-        const last = points[points.length - 1] || {};
         const currentCpu = last.cpu != null ? last.cpu.toFixed(1) + '%' : '—';
         const currentMem = last.memory != null ? formatBytes(last.memory) : '—';
         const currentDisk = last.disk != null ? formatBytes(last.disk) : '—';
