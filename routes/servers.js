@@ -18,6 +18,7 @@ import {
 } from '../world.js';
 import { getEmptySince } from '../auto-stop.js';
 import { audit } from '../audit.js';
+import { sendDiscordWebhook } from '../monitor.js';
 import { requireAuth, requireRole, requireSuper } from '../roles.js';
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
@@ -91,6 +92,20 @@ export default async function (app) {
       local_ip: localIP || '127.0.0.1',
       port: s.port || 25565,
     };
+  }); // <-- MOVE THIS CLOSING BRACKET HERE
+
+  /* ---- test discord webhook ---- */
+  app.post('/api/system/test-webhook', { preHandler: requireRole('operator') }, async (req, reply) => {
+    if (!req.user.is_super) {
+      return reply.code(403).send({ error: 'Forbidden', detail: 'Super-operator required' });
+    }
+
+    try {
+      await sendDiscordWebhook('Dashboard System', '✅ This is a test alert! Your Discord webhook is working perfectly.');
+      return { ok: true, message: 'Test sent successfully.' };
+    } catch (err) {
+      return reply.code(500).send({ error: 'Failed to trigger webhook.' });
+    }
   });
 
   app.get('/api/servers/:name/metrics', { preHandler: requireRole('starter') }, async (req, reply) => {

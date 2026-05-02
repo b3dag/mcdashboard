@@ -1,6 +1,32 @@
 import { listServers, getServerMetrics } from './servers.js';
 import { audit } from './audit.js';
 
+// --- NEW: Discord Webhook Helper ---
+export async function sendDiscordWebhook(serverName, alertMessage) {
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) return; // Skip if no URL is set in .env
+
+  const payload = {
+    username: "Dashboard Monitor",
+    embeds: [{
+      title: `⚠️ Health Alert: ${serverName}`,
+      description: `**Issue Detected:**\n${alertMessage}`,
+      color: 16711680, // Red color
+      timestamp: new Date().toISOString()
+    }]
+  };
+
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (err) {
+    console.error('Failed to send Discord alert:', err);
+  }
+}
+
 export function initMonitoring(app) {
   console.log('Health monitor service started.');
 
@@ -26,13 +52,15 @@ export function initMonitoring(app) {
       }
 
       if (alerts.length > 0) {
-        // Create a system-level audit log entry
         const sysReq = { user: { username: 'SYSTEM' }, ip: '127.0.0.1' };
         
         for (const msg of alerts) {
-          // This will show up in your audit.html automatically!
+          // Log to audit page
           audit(sysReq, 'server.health_alert', s.name, { issue: msg });
           console.warn(`[HEALTH ALERT] ${s.name}: ${msg}`);
+          
+          // --- NEW: Send to Discord ---
+          sendDiscordWebhook(s.name, msg);
         }
       }
     }

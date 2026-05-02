@@ -135,6 +135,7 @@
       el('button', { class: 'btn primary', onclick: () => { currentPage = 1; loadAudit() } }, 'search'),
       el('button', { class: 'btn', onclick: clearFilters }, 'clear'),
       el('button', { class: 'btn export-btn', onclick: exportAudit }, 'export CSV'),
+      el('button', { class: 'btn warn', onclick: testWebhook, style: 'margin-left: auto;' }, 'test discord webhook')
     ]));
 
     main.appendChild(filters);
@@ -278,6 +279,15 @@
         document.body.removeChild(link);
       } catch (err) {
         alert('Export failed: ' + err.message);
+      }
+    }
+
+    async function testWebhook() {
+      try {
+        await api('/api/system/test-webhook', { method: 'POST' });
+        alert('Test sent! Check your Discord channel.');
+      } catch (err) {
+        alert('Test failed: ' + err.message);
       }
     }
 
