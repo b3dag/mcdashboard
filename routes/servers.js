@@ -22,7 +22,6 @@ import { requireAuth, requireRole } from '../roles.js';
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import path from 'node:path';
 
 const MC_USERNAME = /^[a-zA-Z0-9_]{3,16}$/;
 const ALLOWED_AUTO_STOP = [0, 5, 15, 30, 60, 120];
